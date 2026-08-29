@@ -4,6 +4,8 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/ah-naf/pastebin/shared/cache"
@@ -25,19 +27,20 @@ func main() {
 	if err != nil {
 		log.Fatalln(err)
 	}
+	defer conn.Close()
 
 	if err = pgconn.RunMigrations(cfg.DatabaseURL, "infra/migrations"); err != nil {
 		log.Fatalln(err)
 	}
 
 	redis := cache.NewClient(cfg.RedisAddr)
+	defer redis.Close()
 	idCounter := id.NewRedisCounterSource(redis)
 	generator := id.NewGenerator(cfg.IDXORSecret, idCounter)
 
-	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(10*time.Second))
-	defer cancel()
-	s3Store, err := storage.NewStore(ctx, cfg.S3Endpoint, cfg.S3AccessKey, cfg.S3SecretKey, cfg.S3Bucket, cfg.S3UseSSL)
-
+	setupCtx, cancelSetup := context.WithTimeout(context.Background(), 10*time.Second)
+	s3Store, err := storage.NewStore(setupCtx, cfg.S3Endpoint, cfg.S3AccessKey, cfg.S3SecretKey, cfg.S3Bucket, cfg.S3UseSSL)
+	cancelSetup()
 	if err != nil {
 		log.Fatalln(err)
 	}
@@ -50,8 +53,36 @@ func main() {
 	mux.HandleFunc("POST /paste", h.CreatePaste)
 	mux.HandleFunc("GET /healthz", handler.Healthz(repo, s3Store))
 
-	if err = http.ListenAndServe(":"+cfg.Port, mux); err != nil {
-		log.Fatalln(err)
+	server := &http.Server{
+		Addr:    ":" + cfg.Port,
+		Handler: mux,
 	}
 
+	// Listen for SIGINT/SIGTERM (Ctrl+C locally, what Kubernetes sends
+	// before killing a pod) and shut the server down gracefully instead
+	// of dropping in-flight requests.
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	serverErr := make(chan error, 1)
+	go func() {
+		serverErr <- server.ListenAndServe()
+	}()
+
+	select {
+	case err := <-serverErr:
+		if err != nil && err != http.ErrServerClosed {
+			log.Fatalln(err)
+		}
+	case <-ctx.Done():
+		stop()
+		log.Println("shutting down write-service")
+
+		shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancelShutdown()
+
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			log.Fatalln("graceful shutdown failed:", err)
+		}
+	}
 }
