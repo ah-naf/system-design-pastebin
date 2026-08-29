@@ -31,7 +31,7 @@
 - Consumes: nothing (first task).
 - Produces: `func Encode(n uint64) string` and `func Decode(s string) (uint64, error)`, both in package `id`. Task 2 calls these directly.
 
-- [ ] **Step 1: Claude writes the failing test**
+- [x] **Step 1: Claude writes the failing test**
 
 ```go
 package id
@@ -77,25 +77,25 @@ func TestDecodeEmptyString(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `go test ./shared/id/... -run TestEncode -v`
 Expected: FAIL to compile — `undefined: Encode` (and `Decode`) — `shared/id/base62.go` doesn't exist yet.
 
-- [ ] **Step 3: User writes `shared/id/base62.go`**
+- [x] **Step 3: User writes `shared/id/base62.go`**
 
 Implements `Encode(n uint64) string` and `Decode(s string) (uint64, error)`
 using the alphabet from Global Constraints. `Encode(0)` must return `"0"`.
 `Decode` must return a non-nil error for any character outside the alphabet
 and for the empty string.
 
-- [ ] **Step 4: User runs the test, confirms it passes**
+- [x] **Step 4: User runs the test, confirms it passes**
 
 Run: `go test ./shared/id/... -run TestEncode -v` and
 `go test ./shared/id/... -run TestDecode -v`
 Expected: PASS (all 4 test functions).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add shared/id/base62.go shared/id/base62_test.go
@@ -114,7 +114,7 @@ git commit -m "feat: add base62 encode/decode for paste IDs"
 - Consumes: `Encode(n uint64) string` from Task 1 (package `id`, same package — no import needed).
 - Produces: `type CounterSource interface { Next() (uint64, error) }`, `type Generator struct { ... }`, `func NewGenerator(secret uint64, counter CounterSource) *Generator`, `func (g *Generator) New() (string, error)`. Task 3's Redis counter implements `CounterSource` and is passed into `NewGenerator`.
 
-- [ ] **Step 1: Claude writes the failing test**
+- [x] **Step 1: Claude writes the failing test**
 
 ```go
 package id
@@ -184,12 +184,12 @@ func TestGeneratorPropagatesCounterError(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `go test ./shared/id/... -run TestGenerator -v`
 Expected: FAIL to compile — `undefined: CounterSource` / `undefined: NewGenerator`.
 
-- [ ] **Step 3: User writes `shared/id/generator.go`**
+- [x] **Step 3: User writes `shared/id/generator.go`**
 
 Implements `CounterSource`, `Generator`, `NewGenerator`, and `New()`:
 `New()` calls `counter.Next()`, XORs the result with the stored secret,
@@ -198,12 +198,12 @@ passes that to `Encode` from Task 1, and returns the string. If
 error, so `errors.Is` in the test matches (don't wrap it, or wrap with `%w`
 if you do).
 
-- [ ] **Step 4: User runs the test, confirms it passes**
+- [x] **Step 4: User runs the test, confirms it passes**
 
 Run: `go test ./shared/id/... -run TestGenerator -v`
 Expected: PASS (all 3 test functions).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add shared/id/generator.go shared/id/generator_test.go
@@ -224,7 +224,7 @@ git commit -m "feat: add ID generator with XOR obfuscation"
 
 This task requires the local Docker stack running: `cd infra && docker compose up -d` (from Phase 0). The test connects to `localhost:6379` — no auth, matching the Phase 0 compose file.
 
-- [ ] **Step 1: Claude writes the failing test**
+- [x] **Step 1: Claude writes the failing test**
 
 ```go
 package id
@@ -288,12 +288,12 @@ func TestRedisCounterSourceUsesProductionKey(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `go test ./shared/id/... -run TestRedisCounterSource -v`
 Expected: FAIL to compile — `undefined: newRedisCounterSourceWithKey` / `undefined: NewRedisCounterSource` (and a missing `github.com/redis/go-redis/v9` dependency — run `go get github.com/redis/go-redis/v9` first, as part of Step 3, so the test file itself compiles).
 
-- [ ] **Step 3: User writes `shared/id/redis_counter.go`**
+- [x] **Step 3: User writes `shared/id/redis_counter.go`**
 
 Run `go get github.com/redis/go-redis/v9` first. Then implement
 `RedisCounterSource` wrapping a `*redis.Client` and a key name.
@@ -304,13 +304,13 @@ first test, to avoid polluting the shared production key across test runs)
 takes an explicit key. `Next()` calls `client.Incr(ctx, key).Result()` — the
 go-redis client, not raw RESP — and returns `(uint64(result), err)`.
 
-- [ ] **Step 4: User runs the test, confirms it passes**
+- [x] **Step 4: User runs the test, confirms it passes**
 
 Run: `go test ./shared/id/... -run TestRedisCounterSource -v`
 Expected: PASS (both test functions) — or SKIP if the Phase 0 Docker stack
 isn't running (`cd infra && docker compose up -d` to start it first).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add shared/id/redis_counter.go shared/id/redis_counter_test.go go.mod go.sum
@@ -321,10 +321,10 @@ git commit -m "feat: add Redis-backed CounterSource for ID generation"
 
 ## Phase 1 done-criteria checklist
 
-- [ ] `go test ./shared/id/...` passes (Redis-dependent tests pass or skip cleanly).
-- [ ] `Encode`/`Decode` round-trip for all tested values including `0` and `math.MaxUint64`.
-- [ ] Generating 1000 IDs from a fake counter produces 1000 unique strings.
-- [ ] Two generators with different secrets produce different IDs from the same counter sequence (proves XOR is applied).
-- [ ] `RedisCounterSource.Next()` increments `pastebin:id:counter` in the real local Redis.
+- [x] `go test ./shared/id/...` passes (Redis-dependent tests pass or skip cleanly).
+- [x] `Encode`/`Decode` round-trip for all tested values including `0` and `math.MaxUint64`.
+- [x] Generating 1000 IDs from a fake counter produces 1000 unique strings.
+- [x] Two generators with different secrets produce different IDs from the same counter sequence (proves XOR is applied).
+- [x] `RedisCounterSource.Next()` increments `pastebin:id:counter` in the real local Redis.
 
 Once checked, Phase 1 is done. Next: Phase 2 (Write Service — `POST /paste` wiring `Generator` + S3 upload + Postgres metadata row).
