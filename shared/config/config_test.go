@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func setRequiredEnv(t *testing.T) {
 	t.Helper()
@@ -38,6 +41,15 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	if cfg.MaxPasteBytes != 1048576 {
 		t.Errorf("MaxPasteBytes = %d, want 1048576", cfg.MaxPasteBytes)
 	}
+	if cfg.DBMaxOpenConns != 10 {
+		t.Errorf("DBMaxOpenConns = %d, want 10", cfg.DBMaxOpenConns)
+	}
+	if cfg.DBMaxIdleConns != 5 {
+		t.Errorf("DBMaxIdleConns = %d, want 5", cfg.DBMaxIdleConns)
+	}
+	if cfg.DBConnMaxLifetime != 300*time.Second {
+		t.Errorf("DBConnMaxLifetime = %v, want 300s", cfg.DBConnMaxLifetime)
+	}
 }
 
 func TestLoadParsesXORSecret(t *testing.T) {
@@ -71,6 +83,40 @@ func TestLoadOverridesDefaults(t *testing.T) {
 	}
 	if cfg.MaxPasteBytes != 2048 {
 		t.Errorf("MaxPasteBytes = %d, want 2048", cfg.MaxPasteBytes)
+	}
+}
+
+func TestLoadOverridesDBPoolSettings(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("DB_MAX_OPEN_CONNS", "25")
+	t.Setenv("DB_MAX_IDLE_CONNS", "12")
+	t.Setenv("DB_CONN_MAX_LIFETIME_SECONDS", "60")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+	if cfg.DBMaxOpenConns != 25 {
+		t.Errorf("DBMaxOpenConns = %d, want 25", cfg.DBMaxOpenConns)
+	}
+	if cfg.DBMaxIdleConns != 12 {
+		t.Errorf("DBMaxIdleConns = %d, want 12", cfg.DBMaxIdleConns)
+	}
+	if cfg.DBConnMaxLifetime != 60*time.Second {
+		t.Errorf("DBConnMaxLifetime = %v, want 60s", cfg.DBConnMaxLifetime)
+	}
+}
+
+func TestLoadRejectsMalformedDBPoolSettings(t *testing.T) {
+	cases := []string{"DB_MAX_OPEN_CONNS", "DB_MAX_IDLE_CONNS", "DB_CONN_MAX_LIFETIME_SECONDS"}
+	for _, key := range cases {
+		t.Run(key, func(t *testing.T) {
+			setRequiredEnv(t)
+			t.Setenv(key, "not-a-number")
+			if _, err := Load(); err == nil {
+				t.Errorf("Load() with non-numeric %s: expected error, got nil", key)
+			}
+		})
 	}
 }
 

@@ -4,20 +4,24 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"time"
 )
 
 type Config struct {
-	DatabaseURL   string
-	Port          string
-	PublicBaseURL string
-	RedisAddr     string
-	S3Endpoint    string
-	S3Bucket      string
-	S3AccessKey   string
-	S3SecretKey   string
-	S3UseSSL      bool
-	MaxPasteBytes int64
-	IDXORSecret   uint64
+	DatabaseURL       string
+	Port              string
+	PublicBaseURL     string
+	RedisAddr         string
+	S3Endpoint        string
+	S3Bucket          string
+	S3AccessKey       string
+	S3SecretKey       string
+	S3UseSSL          bool
+	MaxPasteBytes     int64
+	IDXORSecret       uint64
+	DBMaxOpenConns    int
+	DBMaxIdleConns    int
+	DBConnMaxLifetime time.Duration
 }
 
 func requiredEnv(key string) (string, error) {
@@ -77,17 +81,35 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("invalid ID_XOR_SECRET: %w", err)
 	}
 
+	dbMaxOpenConns, err := strconv.Atoi(envOrDefault("DB_MAX_OPEN_CONNS", "10"))
+	if err != nil {
+		return nil, fmt.Errorf("invalid DB_MAX_OPEN_CONNS: %w", err)
+	}
+
+	dbMaxIdleConns, err := strconv.Atoi(envOrDefault("DB_MAX_IDLE_CONNS", "5"))
+	if err != nil {
+		return nil, fmt.Errorf("invalid DB_MAX_IDLE_CONNS: %w", err)
+	}
+
+	dbConnMaxLifetimeSeconds, err := strconv.Atoi(envOrDefault("DB_CONN_MAX_LIFETIME_SECONDS", "300"))
+	if err != nil {
+		return nil, fmt.Errorf("invalid DB_CONN_MAX_LIFETIME_SECONDS: %w", err)
+	}
+
 	return &Config{
-		DatabaseURL:   databaseURL,
-		Port:          envOrDefault("PORT", "8080"),
-		PublicBaseURL: envOrDefault("PUBLIC_BASE_URL", "http://localhost:8081"),
-		RedisAddr:     envOrDefault("REDIS_ADDR", "localhost:6379"),
-		S3Endpoint:    envOrDefault("S3_ENDPOINT", "localhost:9000"),
-		S3Bucket:      envOrDefault("S3_BUCKET", "pastebin"),
-		S3AccessKey:   s3AccessKey,
-		S3SecretKey:   s3SecretKey,
-		S3UseSSL:      s3UseSSL,
-		MaxPasteBytes: maxPasteBytes,
-		IDXORSecret:   idXORSecret,
+		DatabaseURL:       databaseURL,
+		Port:              envOrDefault("PORT", "8080"),
+		PublicBaseURL:     envOrDefault("PUBLIC_BASE_URL", "http://localhost:8081"),
+		RedisAddr:         envOrDefault("REDIS_ADDR", "localhost:6379"),
+		S3Endpoint:        envOrDefault("S3_ENDPOINT", "localhost:9000"),
+		S3Bucket:          envOrDefault("S3_BUCKET", "pastebin"),
+		S3AccessKey:       s3AccessKey,
+		S3SecretKey:       s3SecretKey,
+		S3UseSSL:          s3UseSSL,
+		MaxPasteBytes:     maxPasteBytes,
+		IDXORSecret:       idXORSecret,
+		DBMaxOpenConns:    dbMaxOpenConns,
+		DBMaxIdleConns:    dbMaxIdleConns,
+		DBConnMaxLifetime: time.Duration(dbConnMaxLifetimeSeconds) * time.Second,
 	}, nil
 }

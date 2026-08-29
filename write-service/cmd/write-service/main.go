@@ -29,6 +29,13 @@ func main() {
 	}
 	defer conn.Close()
 
+	// Bound the pool: database/sql defaults to unlimited open connections,
+	// which is fine for one replica but exhausts Postgres's max_connections
+	// once you run several write-service pods against the same database.
+	conn.SetMaxOpenConns(cfg.DBMaxOpenConns)
+	conn.SetMaxIdleConns(cfg.DBMaxIdleConns)
+	conn.SetConnMaxLifetime(cfg.DBConnMaxLifetime)
+
 	if err = pgconn.RunMigrations(cfg.DatabaseURL, "infra/migrations"); err != nil {
 		log.Fatalln(err)
 	}
