@@ -33,7 +33,7 @@ Fixes the finding parked in Phase 0's final review: a native Windows PostgreSQL 
 **Interfaces:**
 - Produces: the Postgres host port becomes configurable via `POSTGRES_HOST_PORT` (defaults to `5432` when unset, via Compose's `${VAR:-default}` syntax). `shared/config` (Task 2) must read the actual port from `DATABASE_URL` — never hardcode `localhost:5432`.
 
-- [ ] **Step 1: Claude rewrites `infra/docker-compose.yml`**
+- [x] **Step 1: Claude rewrites `infra/docker-compose.yml`**
 
 ```yaml
 services:
@@ -94,7 +94,7 @@ pinning one that doesn't exist. The healthcheck switch to `mc ready local`,
 MinIO's own bundled readiness command, was the actual robustness fix the
 review flagged — it no longer depends on `curl` being present in the image.)
 
-- [ ] **Step 2: Claude updates `infra/.env.example`**
+- [x] **Step 2: Claude updates `infra/.env.example`**
 
 ```bash
 # infra/.env.example — copy to infra/.env for local dev, never commit .env
@@ -110,14 +110,14 @@ MINIO_ROOT_USER=pastebin_minio
 MINIO_ROOT_PASSWORD=pastebin_minio_password
 ```
 
-- [ ] **Step 3: Claude sets this machine's actual port in `infra/.env` (untracked)**
+- [x] **Step 3: Claude sets this machine's actual port in `infra/.env` (untracked)**
 
 This machine has a native PostgreSQL service on 5432, so set
 `POSTGRES_HOST_PORT=5433` in `infra/.env` (not `.env.example` — that stays
 the generic default). Note the value for Task 2 (`DATABASE_URL` will need
 port `5433` on this machine).
 
-- [ ] **Step 4: Claude drops the redundant `.gitignore` line**
+- [x] **Step 4: Claude drops the redundant `.gitignore` line**
 
 `*.env` already matches `.env` at every depth, so remove the separate
 `.env` line — `.gitignore` becomes:
@@ -128,7 +128,7 @@ port `5433` on this machine).
 *.env
 ```
 
-- [ ] **Step 5: Claude verifies with a full restart cycle**
+- [x] **Step 5: Claude verifies with a full restart cycle**
 
 ```bash
 cd infra
@@ -148,7 +148,7 @@ docker compose exec postgres pg_isready -U pastebin -d pastebin
 host-side reachability proof comes in Task 3, once `shared/pgconn.Open`
 exists and can dial `localhost:5433` directly.)
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 cd ..
@@ -185,7 +185,7 @@ git commit -m "fix: resolve Postgres port conflict, harden compose stack"
   ```
   Task 3-7 all take a `*Config` (or its individual fields) as input — this is the one place every other task's env-var reads route through.
 
-- [ ] **Step 1: Claude writes the failing test**
+- [x] **Step 1: Claude writes the failing test**
 
 ```go
 package config
@@ -305,12 +305,12 @@ func TestLoadRejectsMalformedMaxPasteBytes(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `go test ./shared/config/... -v`
 Expected: FAIL to compile — `undefined: Load` / `undefined: Config`.
 
-- [ ] **Step 3: User writes `shared/config/config.go`**
+- [x] **Step 3: User writes `shared/config/config.go`**
 
 Reads env vars with `os.Getenv`/`os.LookupEnv`. Required (error if empty):
 `DATABASE_URL`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `ID_XOR_SECRET`. Optional
@@ -323,12 +323,12 @@ with `strconv.ParseUint(s, 16, 64)` (same as Phase 1's design). A parse
 failure on any of `S3_USE_SSL`, `MAX_PASTE_BYTES`, or `ID_XOR_SECRET`
 returns an error from `Load`, same as a missing required var.
 
-- [ ] **Step 4: User runs the test, confirms it passes**
+- [x] **Step 4: User runs the test, confirms it passes**
 
 Run: `go test ./shared/config/... -v`
 Expected: PASS (all 8 test functions).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add shared/config/config.go shared/config/config_test.go
@@ -351,7 +351,7 @@ git commit -m "feat: add config loader for write-service"
   (`db.Repo`) calls both in its test setup; `cmd/write-service/main.go`
   (Task 7) calls both at startup.
 
-- [ ] **Step 1: Claude writes the migration files**
+- [x] **Step 1: Claude writes the migration files**
 
 `infra/migrations/000001_init.up.sql`:
 
@@ -373,7 +373,7 @@ CREATE TABLE pastes (
 DROP TABLE pastes;
 ```
 
-- [ ] **Step 2: Claude writes the failing test**
+- [x] **Step 2: Claude writes the failing test**
 
 ```go
 package pgconn
@@ -431,14 +431,14 @@ func TestRunMigrationsIsIdempotent(t *testing.T) {
 in by mistake; `Open` itself in `TestOpenConnectsToRealPostgres` already
 does the reachability check via its own error.)
 
-- [ ] **Step 3: Run test to verify it fails**
+- [x] **Step 3: Run test to verify it fails**
 
 Run: `go test ./shared/pgconn/... -v`
 Expected: FAIL to compile — `undefined: Open` / `undefined: RunMigrations`
 (and missing `github.com/jackc/pgx/v5` / `github.com/golang-migrate/migrate/v4`
 dependencies).
 
-- [ ] **Step 4: User writes `shared/pgconn/pgconn.go`**
+- [x] **Step 4: User writes `shared/pgconn/pgconn.go`**
 
 Run `go get github.com/jackc/pgx/v5/stdlib github.com/golang-migrate/migrate/v4 github.com/golang-migrate/migrate/v4/database/postgres github.com/golang-migrate/migrate/v4/source/file` first.
 
@@ -452,14 +452,14 @@ don't return a DB that can't actually connect).
 then call `.Up()`. Treat `migrate.ErrNoChange` as success (that's what
 makes the second call in the test a no-op instead of an error).
 
-- [ ] **Step 5: User runs the test, confirms it passes**
+- [x] **Step 5: User runs the test, confirms it passes**
 
 Run: `go test ./shared/pgconn/... -v`
 Expected: PASS (both test functions) — or SKIP if Postgres isn't reachable
 (check `docker compose ps` and that `localDSN`'s port matches your
 `infra/.env`'s `POSTGRES_HOST_PORT`).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add shared/pgconn/pgconn.go shared/pgconn/pgconn_test.go infra/migrations/ go.mod go.sum
@@ -496,7 +496,7 @@ git commit -m "feat: add Postgres connection + migration runner"
   (`InsertPaste(ctx, db.Paste) error`), which `*Repo` satisfies. Task 7
   (`main.go`) constructs a `*Repo` via `NewRepo`.
 
-- [ ] **Step 1: Claude writes the failing test**
+- [x] **Step 1: Claude writes the failing test**
 
 ```go
 package db
@@ -578,12 +578,12 @@ func TestRepoPing(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `go test ./write-service/internal/db/... -v`
 Expected: FAIL to compile — `undefined: Repo` / `undefined: NewRepo` / `undefined: Paste`.
 
-- [ ] **Step 3: User writes `write-service/internal/db/repo.go`**
+- [x] **Step 3: User writes `write-service/internal/db/repo.go`**
 
 `InsertPaste` runs a plain `INSERT INTO pastes (paste_id, s3_key,
 created_at, expires_at, size_bytes, is_deleted, owner_id) VALUES (...)`
@@ -592,12 +592,12 @@ pass them straight through as query args (the pgx driver handles `nil`
 pointer args as SQL `NULL` natively, no manual `sql.NullString`/`sql.NullTime`
 needed). `Ping` runs `SELECT 1` with `db.PingContext(ctx)` or a trivial query.
 
-- [ ] **Step 4: User runs the test, confirms it passes**
+- [x] **Step 4: User runs the test, confirms it passes**
 
 Run: `go test ./write-service/internal/db/... -v`
 Expected: PASS (all 3 test functions) — or SKIP if Postgres isn't reachable.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add write-service/internal/db/repo.go write-service/internal/db/repo_test.go
@@ -624,7 +624,7 @@ git commit -m "feat: add Postgres repo for paste metadata"
   (`Put(ctx, key, r, size) error`), which `*Store` satisfies. Task 7
   (`main.go`) constructs a `*Store` via `NewStore`.
 
-- [ ] **Step 1: Claude writes the failing test**
+- [x] **Step 1: Claude writes the failing test**
 
 ```go
 package storage
@@ -682,13 +682,13 @@ func TestStorePing(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `go test ./write-service/internal/storage/... -v`
 Expected: FAIL to compile — `undefined: NewStore` / `undefined: Store` (and
 a missing `github.com/aws/aws-sdk-go-v2/...` dependency).
 
-- [ ] **Step 3: User writes `write-service/internal/storage/store.go`**
+- [x] **Step 3: User writes `write-service/internal/storage/store.go`**
 
 Run `go get github.com/aws/aws-sdk-go-v2/aws github.com/aws/aws-sdk-go-v2/config github.com/aws/aws-sdk-go-v2/credentials github.com/aws/aws-sdk-go-v2/service/s3` first.
 
@@ -704,12 +704,12 @@ not a failure — return any other error from `NewStore`.
 `Put` calls `s3client.PutObject` with `Bucket`, `Key: key`, `Body: r`. `Ping`
 calls `s3client.HeadBucket` on the stored bucket name.
 
-- [ ] **Step 4: User runs the test, confirms it passes**
+- [x] **Step 4: User runs the test, confirms it passes**
 
 Run: `go test ./write-service/internal/storage/... -v`
 Expected: PASS (all 4 test functions) — or SKIP if MinIO isn't reachable.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add write-service/internal/storage/store.go write-service/internal/storage/store_test.go go.mod go.sum
@@ -743,7 +743,7 @@ git commit -m "feat: add S3/MinIO storage client"
   Task 7 (`main.go`) wires the real implementations in and registers both
   handler functions on the `http.ServeMux`.
 
-- [ ] **Step 1: Claude writes the failing test**
+- [x] **Step 1: Claude writes the failing test**
 
 ```go
 package handler
@@ -966,12 +966,12 @@ func TestHealthzS3Down(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `go test ./write-service/internal/handler/... -v`
 Expected: FAIL to compile — `undefined: New` / `undefined: Handler` / `undefined: Healthz`.
 
-- [ ] **Step 3: User writes `write-service/internal/handler/handler.go`**
+- [x] **Step 3: User writes `write-service/internal/handler/handler.go`**
 
 `CreatePaste`: wrap `r.Body` with `http.MaxBytesReader(w, r.Body, h.maxBytes)`
 before decoding JSON — a body over the limit makes `json.Decode` return an
@@ -993,12 +993,12 @@ calls both `Ping`s with a short-timeout context (e.g. `context.WithTimeout`,
 {"status":"degraded","postgres":"ok|error","s3":"ok|error"}` if either
 fails.
 
-- [ ] **Step 4: User runs the test, confirms it passes**
+- [x] **Step 4: User runs the test, confirms it passes**
 
 Run: `go test ./write-service/internal/handler/... -v`
 Expected: PASS (all 10 test functions).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add write-service/internal/handler/handler.go write-service/internal/handler/handler_test.go
@@ -1022,7 +1022,7 @@ running the service and exercising it with `curl`, together.
 - Produces: a running HTTP server on `cfg.Port` with `POST /paste` and
   `GET /healthz` registered.
 
-- [ ] **Step 1: User writes `shared/cache/redis.go`**
+- [x] **Step 1: User writes `shared/cache/redis.go`**
 
 ```go
 package cache
@@ -1032,7 +1032,7 @@ package cache
 // passthrough of a well-tested library constructor).
 ```
 
-- [ ] **Step 2: User writes `write-service/cmd/write-service/main.go`**
+- [x] **Step 2: User writes `write-service/cmd/write-service/main.go`**
 
 Order: `config.Load()` (fatal on error) → `pgconn.Open(cfg.DatabaseURL)`
 (fatal on error) → `pgconn.RunMigrations(cfg.DatabaseURL, "infra/migrations")`
@@ -1047,7 +1047,7 @@ Register `mux.HandleFunc("POST /paste", h.CreatePaste)` and
 `mux.HandleFunc("GET /healthz", handler.Healthz(repo, store))` (Go 1.22+
 `ServeMux` method-prefixed patterns). `http.ListenAndServe(":"+cfg.Port, mux)`.
 
-- [ ] **Step 3: User runs the service and both of you verify with curl**
+- [x] **Step 3: User runs the service and both of you verify with curl**
 
 ```bash
 cd infra && docker compose up -d && cd ..
@@ -1079,7 +1079,7 @@ docker compose -f infra/docker-compose.yml exec postgres psql -U pastebin -d pas
 
 Expected: two rows matching the two successful curl calls.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add shared/cache/redis.go write-service/cmd/write-service/main.go go.mod go.sum
@@ -1090,11 +1090,11 @@ git commit -m "feat: wire up write-service main"
 
 ## Phase 2 done-criteria checklist
 
-- [ ] `go test ./...` passes (Redis/Postgres/MinIO-dependent tests pass or skip cleanly).
-- [ ] `docker compose ps` shows all three Phase 0 services `(healthy)`, with Postgres now reachable from the host at the port in `infra/.env`.
-- [ ] `go run ./write-service/cmd/write-service` starts and serves `GET /healthz` → `200`.
-- [ ] `POST /paste` with valid JSON content returns `201` with a shareable URL, uploads to MinIO, and inserts a row in Postgres — verified by hand with curl + `psql` per Task 7.
-- [ ] `POST /paste` with empty content → `400`; oversized body → `413`.
-- [ ] No code path writes a metadata row before its S3 upload has succeeded.
+- [x] `go test ./...` passes (Redis/Postgres/MinIO-dependent tests pass or skip cleanly).
+- [x] `docker compose ps` shows all three Phase 0 services `(healthy)`, with Postgres now reachable from the host at the port in `infra/.env`.
+- [x] `go run ./write-service/cmd/write-service` starts and serves `GET /healthz` → `200`.
+- [x] `POST /paste` with valid JSON content returns `201` with a shareable URL, uploads to MinIO, and inserts a row in Postgres — verified by hand with curl + `psql` per Task 7.
+- [x] `POST /paste` with empty content → `400`; oversized body → `413`.
+- [x] No code path writes a metadata row before its S3 upload has succeeded.
 
 Once checked, Phase 2 is done. Next: Phase 3 (Read Service — `GET /paste/{id}` via cache → DB → S3, with negative caching).
