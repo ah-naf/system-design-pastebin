@@ -42,18 +42,26 @@ func TestRedisCounterSourceIncrements(t *testing.T) {
 func TestRedisCounterSourceUsesProductionKey(t *testing.T) {
 	client := requireRedis(t)
 	defer client.Close()
-	defer client.Del(t.Context(), "pastebin:id:counter")
+
+	// pastebin:id:counter is the real production key — other processes
+	// (write-service, other test runs) may have already incremented it,
+	// so assert a relative increment rather than an absolute starting
+	// value.
+	before, err := client.Get(t.Context(), "pastebin:id:counter").Int64()
+	if err != nil && err != redis.Nil {
+		t.Fatalf("could not read starting value of \"pastebin:id:counter\": %v", err)
+	}
 
 	counter := NewRedisCounterSource(client)
 	if _, err := counter.Next(); err != nil {
 		t.Fatalf("Next() returned error: %v", err)
 	}
 
-	val, err := client.Get(t.Context(), "pastebin:id:counter").Result()
+	after, err := client.Get(t.Context(), "pastebin:id:counter").Int64()
 	if err != nil {
 		t.Fatalf("could not read key \"pastebin:id:counter\" that NewRedisCounterSource should have incremented: %v", err)
 	}
-	if val != "1" {
-		t.Errorf("pastebin:id:counter = %q, want \"1\" (key should have started fresh in this test's isolated Redis)", val)
+	if after != before+1 {
+		t.Errorf("pastebin:id:counter went from %d to %d, want exactly +1", before, after)
 	}
 }
