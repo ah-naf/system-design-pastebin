@@ -199,7 +199,7 @@ git commit -m "feat: add Redis distributed lock methods to read-service cache"
 
 ---
 
-### Task 2: Stampede-protected miss handling in the read-service handler
+### Task 2: Stampede-protected miss handling in the read-service handler — DONE
 
 **Files:**
 - Modify: `read-service/internal/handler/handler.go`
@@ -574,7 +574,7 @@ git commit -m "feat: add stampede-protected cache miss handling to read-service 
 
 ---
 
-### Task 3: Redis eviction config for the dev stack
+### Task 3: Redis eviction config for the dev stack — DONE
 
 **Files:**
 - Modify: `infra/docker-compose.yml`
