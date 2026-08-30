@@ -35,7 +35,7 @@ Read Service has no use for `ID_XOR_SECRET` (only Write Service's `id.Generator`
 **Interfaces:**
 - Produces: `Config.IDXORSecret` is `0` (zero value) when `ID_XOR_SECRET` is unset, instead of `Load()` erroring. Task 6 (`read-service/cmd/read-service/main.go`) relies on being able to call `config.Load()` without setting that env var.
 
-- [ ] **Step 1: Claude edits `shared/config/config.go`**
+- [x] **Step 1: Claude edits `shared/config/config.go`**
 
 Change the `ID_XOR_SECRET` handling from `requiredEnv` to optional parsing:
 
@@ -51,7 +51,7 @@ if raw := os.Getenv("ID_XOR_SECRET"); raw != "" {
 
 (replacing the old `requiredEnv("ID_XOR_SECRET")` + unconditional `ParseUint` block). `idXORSecret` defaults to `0` if the block above never runs.
 
-- [ ] **Step 2: Claude updates `shared/config/config_test.go`**
+- [x] **Step 2: Claude updates `shared/config/config_test.go`**
 
 `TestLoadRequiresIDXORSecret` currently asserts `Load()` errors when `ID_XOR_SECRET` is empty — that's no longer true, so replace it:
 
@@ -71,7 +71,7 @@ func TestLoadAllowsMissingIDXORSecret(t *testing.T) {
 
 `TestLoadRejectsMalformedXORSecret` stays as-is — a malformed (non-empty, non-hex) value must still error.
 
-- [ ] **Step 3: Claude adds a startup check to `write-service/cmd/write-service/main.go`**
+- [x] **Step 3: Claude adds a startup check to `write-service/cmd/write-service/main.go`**
 
 Right after `cfg, err := config.Load()` and its error check, add:
 
@@ -83,12 +83,12 @@ if cfg.IDXORSecret == 0 {
 
 (A genuinely-configured secret that happens to parse to exactly `0` — e.g. `"0000000000000000"` — would also trip this and be rejected as "unset." That's an accepted simplification: an all-zero XOR secret provides no obfuscation anyway, so treating it as invalid is correct, not just convenient.)
 
-- [ ] **Step 4: Run the full test suite, confirm nothing broke**
+- [x] **Step 4: Run the full test suite, confirm nothing broke**
 
 Run: `go test ./... -count=1`
 Expected: all packages `ok`, including the updated `shared/config` suite.
 
-- [ ] **Step 5: Manually verify write-service still refuses to start without the secret**
+- [x] **Step 5: Manually verify write-service still refuses to start without the secret**
 
 ```bash
 DATABASE_URL="postgres://pastebin:pastebin_dev_password@localhost:5433/pastebin?sslmode=disable" \
@@ -98,7 +98,7 @@ go run ./write-service/cmd/write-service
 
 Expected: exits immediately with `ID_XOR_SECRET is required for write-service` (no `ID_XOR_SECRET` was set in this command).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add shared/config/config.go shared/config/config_test.go write-service/cmd/write-service/main.go
@@ -130,7 +130,7 @@ git commit -m "refactor: make ID_XOR_SECRET optional in shared config, required 
   Task 5 (`handler`) depends on the `Repository` interface
   (`GetPaste(ctx, id) (*db.PasteMeta, error)`), which `*Repo` satisfies.
 
-- [ ] **Step 1: Claude writes the failing test**
+- [x] **Step 1: Claude writes the failing test**
 
 ```go
 package db
@@ -248,12 +248,12 @@ func TestRepoPing(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `go test ./read-service/internal/db/... -v`
 Expected: FAIL to compile — `undefined: Repo` / `undefined: NewRepo` / `undefined: PasteMeta` / `undefined: ErrNotFound`.
 
-- [ ] **Step 3: User writes `read-service/internal/db/repo.go`**
+- [x] **Step 3: User writes `read-service/internal/db/repo.go`**
 
 `GetPaste` runs `SELECT s3_key, expires_at FROM pastes WHERE paste_id = $1
 AND is_deleted = false AND (expires_at IS NULL OR expires_at > now())`
@@ -265,12 +265,12 @@ return the package's own `ErrNotFound`, not the raw `sql.ErrNoRows` —
 callers outside this package shouldn't need to know it's backed by SQL).
 `Ping` is identical to Write Service's `Repo.Ping`.
 
-- [ ] **Step 4: User runs the test, confirms it passes**
+- [x] **Step 4: User runs the test, confirms it passes**
 
 Run: `go test ./read-service/internal/db/... -v`
 Expected: PASS (all 6 test functions) — or SKIP if Postgres isn't reachable.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add read-service/internal/db/repo.go read-service/internal/db/repo_test.go
@@ -298,7 +298,7 @@ git commit -m "feat: add read-only Postgres repo for read-service"
   Task 5 (`handler`) depends on the `Getter` interface
   (`Get(ctx, key) (io.ReadCloser, int64, error)`), which `*Store` satisfies.
 
-- [ ] **Step 1: Claude writes the failing test**
+- [x] **Step 1: Claude writes the failing test**
 
 ```go
 package storage
@@ -394,12 +394,12 @@ func TestStorePing(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `go test ./read-service/internal/storage/... -v`
 Expected: FAIL to compile — `undefined: NewStore` / `undefined: Store`.
 
-- [ ] **Step 3: User writes `read-service/internal/storage/store.go`**
+- [x] **Step 3: User writes `read-service/internal/storage/store.go`**
 
 Same S3 client construction as Write Service's `storage.NewStore`
 (static credentials, `BaseEndpoint` + `UsePathStyle: true`), but **no**
@@ -412,12 +412,12 @@ from the DB lookup, so a missing object at this point is a genuine
 inconsistency, not an expected case to special-case). `Ping` calls
 `client.HeadBucket` same as Write Service's.
 
-- [ ] **Step 4: User runs the test, confirms it passes**
+- [x] **Step 4: User runs the test, confirms it passes**
 
 Run: `go test ./read-service/internal/storage/... -v`
 Expected: PASS (all 3 test functions) — or SKIP if MinIO isn't reachable.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add read-service/internal/storage/store.go read-service/internal/storage/store_test.go
@@ -451,7 +451,7 @@ git commit -m "feat: add read-only S3/MinIO storage client for read-service"
   Task 5 (`handler`) depends on `CacheGetter`/`CacheSetter` interfaces built
   from these exact signatures, which `*Cache` satisfies.
 
-- [ ] **Step 1: Claude writes the failing test**
+- [x] **Step 1: Claude writes the failing test**
 
 ```go
 package cache
@@ -559,12 +559,12 @@ func TestCacheDegradesGracefullyWhenRedisUnavailable(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `go test ./read-service/internal/cache/... -v`
 Expected: FAIL to compile — `undefined: NewCache` / `undefined: Cache` / `undefined: Miss` / `undefined: Hit` / `undefined: Negative`.
 
-- [ ] **Step 3: User writes `read-service/internal/cache/cache.go`**
+- [x] **Step 3: User writes `read-service/internal/cache/cache.go`**
 
 Key naming: `"paste:content:" + id` for positive entries, `"paste:missing:"
 + id` for negative entries (both from the Global Constraints/design doc).
@@ -578,12 +578,12 @@ the error with the stdlib `log` package but do not return it.
 log-and-ignore any error (no return value on these methods at all, so
 there's nothing to propagate even if you wanted to).
 
-- [ ] **Step 4: User runs the test, confirms it passes**
+- [x] **Step 4: User runs the test, confirms it passes**
 
 Run: `go test ./read-service/internal/cache/... -v`
 Expected: PASS (all 5 test functions) — or SKIP if Redis isn't reachable.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add read-service/internal/cache/cache.go read-service/internal/cache/cache_test.go
@@ -625,7 +625,7 @@ git commit -m "feat: add cache-aside layer with negative caching for read-servic
   `r.PathValue("id")` (Go 1.22+ `ServeMux` pattern:
   `"GET /paste/{id}"`).
 
-- [ ] **Step 1: Claude writes the failing test**
+- [x] **Step 1: Claude writes the failing test**
 
 ```go
 package handler
@@ -840,12 +840,12 @@ func TestHealthzPostgresDown(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `go test ./read-service/internal/handler/... -v`
 Expected: FAIL to compile — `undefined: New` / `undefined: Handler` / `undefined: Healthz`.
 
-- [ ] **Step 3: User writes `read-service/internal/handler/handler.go`**
+- [x] **Step 3: User writes `read-service/internal/handler/handler.go`**
 
 `GetPaste`: extract `id := r.PathValue("id")`. Call `h.cacheGet.Get(ctx,
 id)`. On `cache.Hit`: set `Content-Type: text/plain; charset=utf-8`,
@@ -868,12 +868,12 @@ the cache population read the same bytes once; after the copy, compute
 Service's — both `Ping` calls succeed → `200 {"status":"ok"}`; either
 fails → `503 {"status":"degraded","postgres":"ok|error","s3":"ok|error"}`.
 
-- [ ] **Step 4: User runs the test, confirms it passes**
+- [x] **Step 4: User runs the test, confirms it passes**
 
 Run: `go test ./read-service/internal/handler/... -v`
 Expected: PASS (all 9 test functions).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add read-service/internal/handler/handler.go read-service/internal/handler/handler_test.go
@@ -900,7 +900,7 @@ interoperate.
   `GET /healthz` registered. **No `POST /paste` route exists in this
   binary** — that's the whole point of Hard Constraint #1.
 
-- [ ] **Step 1: User writes `read-service/cmd/read-service/main.go`**
+- [x] **Step 1: User writes `read-service/cmd/read-service/main.go`**
 
 Mirrors `write-service/cmd/write-service/main.go`'s structure: `config.Load()`
 (fatal on error — no `ID_XOR_SECRET` check needed here, unlike write-service)
@@ -921,7 +921,7 @@ graceful-shutdown pattern as write-service's `main.go`
 (`signal.NotifyContext` + `server.Shutdown`) — copy that structure rather
 than inventing a new one.
 
-- [ ] **Step 2: Build and start both services, verify end-to-end together**
+- [x] **Step 2: Build and start both services, verify end-to-end together**
 
 Terminal 1 (Write Service, same as Phase 2's verification):
 
@@ -969,7 +969,7 @@ Expected: `/healthz` → `200`. First `POST /paste` → `201` with an `id`.
 Both `GET /paste/<id>` calls → `200` with body `"end to end works"` and
 `Content-Type: text/plain; charset=utf-8`. Both made-up-id calls → `404`.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add read-service/cmd/read-service/main.go
@@ -980,13 +980,13 @@ git commit -m "feat: wire up read-service main"
 
 ## Phase 3 done-criteria checklist
 
-- [ ] `go test ./...` passes (Redis/Postgres/MinIO-dependent tests pass or skip cleanly).
-- [ ] `go run ./read-service/cmd/read-service` starts and serves `GET /healthz` → `200`.
-- [ ] A paste created via Write Service's `POST /paste` is retrievable via Read Service's `GET /paste/{id}` — verified by hand in Task 6.
-- [ ] A cache hit skips the DB and S3 entirely (proven by the handler unit tests, not observable via curl alone).
-- [ ] A missing/expired/deleted paste ID returns `404` from Read Service, both before and after negative caching kicks in.
-- [ ] Read Service has no `POST /paste` route — confirmed by `main.go`'s route registration containing only `GET` handlers.
-- [ ] Killing Redis (`docker compose stop redis`) does not break `GET /paste/{id}` for a previously-cached-or-not id — it just gets slower (falls through to DB+S3 every time). Not scripted in this plan; worth trying by hand if you want to see the "cache is never a hard dependency" constraint hold under an actual outage.
+- [x] `go test ./...` passes (Redis/Postgres/MinIO-dependent tests pass or skip cleanly).
+- [x] `go run ./read-service/cmd/read-service` starts and serves `GET /healthz` → `200`.
+- [x] A paste created via Write Service's `POST /paste` is retrievable via Read Service's `GET /paste/{id}` — verified by hand in Task 6.
+- [x] A cache hit skips the DB and S3 entirely (proven by the handler unit tests, not observable via curl alone).
+- [x] A missing/expired/deleted paste ID returns `404` from Read Service, both before and after negative caching kicks in.
+- [x] Read Service has no `POST /paste` route — confirmed by `main.go`'s route registration containing only `GET` handlers.
+- [x] Killing Redis (`docker compose stop redis`) does not break `GET /paste/{id}` for a previously-cached-or-not id — it just gets slower (falls through to DB+S3 every time). Not scripted in this plan; worth trying by hand if you want to see the "cache is never a hard dependency" constraint hold under an actual outage.
 
 Once checked, Phase 3 is done. Next: Phase 4 (Expiration sweeper — a
 separate background process, not part of Read or Write Service, that
