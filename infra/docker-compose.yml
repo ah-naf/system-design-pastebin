@@ -26,6 +26,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
 
   minio:
     image: minio/minio:latest
