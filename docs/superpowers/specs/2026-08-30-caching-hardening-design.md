@@ -39,22 +39,34 @@ is small enough that this keeps related Redis operations together.
 
 ```go
 // AcquireLock attempts to acquire a short-lived per-paste lock.
-// Returns true if this call acquired the lock, false if another
-// holder already has it. A non-nil error means Redis itself failed
-// (as opposed to normal lock contention) and callers should treat
-// this the same as a cache miss with no lock available.
-func (c *Cache) AcquireLock(ctx context.Context, id string) (bool, error)
+// Returns true and a non-empty owner token if this call acquired the
+// lock, false and an empty token if another holder already has it.
+// A non-nil error means Redis itself failed (as opposed to normal
+// lock contention) and callers should treat this the same as a cache
+// miss with no lock available.
+func (c *Cache) AcquireLock(ctx context.Context, id string) (bool, string, error)
 
-// ReleaseLock releases a previously acquired lock. Safe to call
-// even if the lock was never acquired or has already expired.
-func (c *Cache) ReleaseLock(ctx context.Context, id string) error
+// ReleaseLock releases a previously acquired lock, but only if the
+// stored value still matches token — a compare-and-delete done via a
+// Lua script for atomicity. Safe to call even if the lock was never
+// acquired, has already expired, or has since been acquired by a
+// different holder (in which case it is a no-op).
+func (c *Cache) ReleaseLock(ctx context.Context, id, token string) error
 ```
 
 - **Key:** `paste:lock:{id}`
-- **Acquire:** `SET paste:lock:{id} 1 NX PX 5000` (5s TTL) — the short TTL
-  bounds how long a crashed lock-holder can block other requests before the
-  lock self-heals.
-- **Release:** plain `DEL paste:lock:{id}`.
+- **Acquire:** generate a random 16-byte token (hex-encoded), then
+  `SET paste:lock:{id} {token} NX PX 5000` (5s TTL) — the short TTL bounds
+  how long a crashed lock-holder can block other requests before the lock
+  self-heals.
+- **Release:** compare-and-delete, not a plain `DEL`. A plain `DEL` has a
+  real race: if a holder's fetch takes longer than the 5s TTL, the lock
+  expires and a *new* holder acquires it before the original holder's
+  `defer ReleaseLock` runs — a plain `DEL` at that point would delete the
+  new holder's lock, not its own, letting a third request in early. The
+  owner-token compare-and-delete (Lua: `GET` then `DEL` only if it still
+  equals the caller's token, executed atomically via `EVAL`) makes
+  `ReleaseLock` a no-op in that scenario instead.
 - Both operations return the underlying Redis error (unlike `Get`/
   `SetPositive`/`SetNegative`, which swallow errors) because the handler
   needs to distinguish "lock is held by someone else" from "Redis is
@@ -67,14 +79,14 @@ Today: `Get(id)` → Miss → repo lookup → S3 fetch → populate cache → re
 New, only on the Miss branch:
 
 1. Call `AcquireLock(ctx, id)`.
-2. **Acquired (`true, nil`):** proceed with today's existing miss path
+2. **Acquired (`true, token, nil`):** proceed with today's existing miss path
    unchanged (repo lookup → S3 fetch → `SetPositive`/`SetNegative`),
-   wrapped in `defer ReleaseLock(ctx, id)` so the lock is freed as soon as
-   the fetch completes rather than held for the full 5s TTL.
-3. **Redis error (`false, err`):** skip locking entirely — proceed with
+   wrapped in `defer ReleaseLock(ctx, id, token)` so the lock is freed as soon
+   as the fetch completes rather than held for the full 5s TTL.
+3. **Redis error (`false, "", err`):** skip locking entirely — proceed with
    today's existing miss path directly, no `ReleaseLock` call (nothing was
    acquired). This is the "Redis is non-critical" fallback.
-4. **Contended (`false, nil`):** poll `Get(ctx, id)` every 50ms, up to a
+4. **Contended (`false, "", nil`):** poll `Get(ctx, id)` every 50ms, up to a
    ~1 second total budget (20 attempts):
    - `Hit` → serve the cached content directly (same as a normal cache hit).
    - `Negative` → respond 404 (same as today's negative-cache path).
@@ -115,12 +127,16 @@ The fake cache used in these tests needs to simulate lock state and,
 where relevant, a cache value appearing after N polls — e.g. a counter that
 flips `Get`'s return value after a configured number of calls.
 
-`cache.go` gets two additional real-Redis integration tests (skipped when
+`cache.go` gets three additional real-Redis integration tests (skipped when
 Redis isn't reachable, matching the existing pattern in this package):
 
 - `AcquireLock` mutual exclusion: two calls for the same ID, only one
-  returns `true`.
+  returns `true` with a non-empty token.
 - `ReleaseLock` clears the key: acquire, release, acquire again succeeds.
+- `ReleaseLock` does not delete a mismatched token: acquire (get token A),
+  simulate a new holder overwriting the key, then `ReleaseLock` with token A
+  must leave the new holder's lock intact — this is the regression test for
+  the race described in the Architecture section above.
 
 ## Eviction config
 

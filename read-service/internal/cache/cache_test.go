@@ -101,3 +101,99 @@ func TestCacheDegradesGracefullyWhenRedisUnavailable(t *testing.T) {
 	c.SetPositive(context.Background(), id, []byte("x"), time.Minute)
 	c.SetNegative(context.Background(), id, time.Minute)
 }
+
+func TestAcquireLockMutualExclusion(t *testing.T) {
+	client := requireRedis(t)
+	defer client.Close()
+	id := "test-lock-" + t.Name()
+	t.Cleanup(func() {
+		client.Del(context.Background(), "paste:lock:"+id)
+	})
+
+	c := NewCache(client)
+
+	first, token, err := c.AcquireLock(context.Background(), id)
+	if err != nil {
+		t.Fatalf("AcquireLock() first call error: %v", err)
+	}
+	if !first {
+		t.Fatal("AcquireLock() first call = false, want true")
+	}
+	if token == "" {
+		t.Error("AcquireLock() first call returned empty token, want non-empty")
+	}
+
+	second, secondToken, err := c.AcquireLock(context.Background(), id)
+	if err != nil {
+		t.Fatalf("AcquireLock() second call error: %v", err)
+	}
+	if second {
+		t.Error("AcquireLock() second call = true, want false (lock already held)")
+	}
+	if secondToken != "" {
+		t.Error("AcquireLock() second call returned non-empty token despite not acquiring the lock")
+	}
+}
+
+func TestReleaseLockClearsKey(t *testing.T) {
+	client := requireRedis(t)
+	defer client.Close()
+	id := "test-lock-release-" + t.Name()
+	t.Cleanup(func() {
+		client.Del(context.Background(), "paste:lock:"+id)
+	})
+
+	c := NewCache(client)
+
+	acquired, token, err := c.AcquireLock(context.Background(), id)
+	if err != nil || !acquired {
+		t.Fatalf("AcquireLock() = (%v, %q, %v), want (true, non-empty, nil)", acquired, token, err)
+	}
+
+	if err := c.ReleaseLock(context.Background(), id, token); err != nil {
+		t.Fatalf("ReleaseLock() error: %v", err)
+	}
+
+	reacquired, _, err := c.AcquireLock(context.Background(), id)
+	if err != nil {
+		t.Fatalf("AcquireLock() after release error: %v", err)
+	}
+	if !reacquired {
+		t.Error("AcquireLock() after ReleaseLock = false, want true (lock was cleared)")
+	}
+}
+
+func TestReleaseLockDoesNotDeleteMismatchedToken(t *testing.T) {
+	client := requireRedis(t)
+	defer client.Close()
+	id := "test-lock-mismatch-" + t.Name()
+	key := "paste:lock:" + id
+	t.Cleanup(func() {
+		client.Del(context.Background(), key)
+	})
+
+	c := NewCache(client)
+
+	_, staleToken, err := c.AcquireLock(context.Background(), id)
+	if err != nil {
+		t.Fatalf("AcquireLock() error: %v", err)
+	}
+
+	// Simulate the lock expiring and a different requester acquiring it,
+	// as if this holder's fetch took longer than the lock TTL.
+	if err := client.Set(context.Background(), key, "someone-elses-token", 5*time.Second).Err(); err != nil {
+		t.Fatalf("failed to simulate a new lock holder: %v", err)
+	}
+
+	if err := c.ReleaseLock(context.Background(), id, staleToken); err != nil {
+		t.Fatalf("ReleaseLock() error: %v", err)
+	}
+
+	val, err := client.Get(context.Background(), key).Result()
+	if err != nil {
+		t.Fatalf("expected the new holder's lock to still exist, Get() error: %v", err)
+	}
+	if val != "someone-elses-token" {
+		t.Errorf("lock value = %q, want %q (a stale ReleaseLock must not delete a different holder's lock)", val, "someone-elses-token")
+	}
+}

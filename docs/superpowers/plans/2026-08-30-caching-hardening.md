@@ -4,9 +4,9 @@
 
 **Goal:** Prevent cache-stampede load on DB/S3 when many concurrent requests miss the read-service cache for the same paste ID, and configure Redis eviction so the cache degrades predictably under memory pressure.
 
-**Architecture:** Add a short-TTL Redis distributed lock (`AcquireLock`/`ReleaseLock`) to the existing `read-service/internal/cache.Cache` type. The read-service handler tries to acquire the lock on a cache miss; the winner does the existing DB+S3 fetch path, everyone else polls the cache briefly and falls back to the same fetch path if the poll budget expires. Separately, configure the dev Redis container with `maxmemory` + `allkeys-lru` eviction.
+**Architecture:** Add a short-TTL, owner-token Redis distributed lock (`AcquireLock`/`ReleaseLock`) to the existing `read-service/internal/cache.Cache` type. The read-service handler tries to acquire the lock on a cache miss; the winner does the existing DB+S3 fetch path, everyone else polls the cache briefly and falls back to the same fetch path if the poll budget expires. Separately, configure the dev Redis container with `maxmemory` + `allkeys-lru` eviction.
 
-**Tech Stack:** Go 1.26 stdlib, `github.com/redis/go-redis/v9` (already a dependency), Docker Compose.
+**Tech Stack:** Go 1.26 stdlib (`crypto/rand`, `encoding/hex`), `github.com/redis/go-redis/v9` (already a dependency, `Eval` for the compare-and-delete script), Docker Compose.
 
 ## Global Constraints
 
@@ -14,10 +14,11 @@
 - The cache-aside read path (cache → DB → S3, with negative caching) stays as-is; this phase only adds coordination around the existing Miss branch.
 - Interface-seam pattern: every dependency the handler uses is an interface (`CacheGetter`, `CacheSetter`, `Repository`, `StoreRepository`), with fakes in unit tests and the real `*cache.Cache` in production.
 - Claude writes only test files; the user implements all production code (`cache.go`, `handler.go`, `docker-compose.yml`).
+- `ReleaseLock` must be a compare-and-delete keyed on an owner token, not a plain `DEL` — a plain `DEL` can delete a different holder's lock if the original holder's fetch outlives the lock's TTL (see Task 1 for the exact race and its regression test).
 
 ---
 
-### Task 1: Redis distributed lock methods on `Cache`
+### Task 1: Redis distributed lock methods on `Cache` — DONE
 
 **Files:**
 - Modify: `read-service/internal/cache/cache.go`
@@ -26,13 +27,13 @@
 **Interfaces:**
 - Consumes: existing `Cache` struct (`client *redis.Client`), existing `NewCache(client *redis.Client) *Cache`.
 - Produces:
-  - `func (c *Cache) AcquireLock(ctx context.Context, id string) (bool, error)` — `true` if this call acquired the lock, `false` if another holder already has it, non-nil `error` only when Redis itself failed.
-  - `func (c *Cache) ReleaseLock(ctx context.Context, id string) error` — clears the lock; safe to call even if never acquired or already expired.
-  - Lock key: `"paste:lock:" + id`, 5 second TTL.
+  - `func (c *Cache) AcquireLock(ctx context.Context, id string) (bool, string, error)` — `true` and a non-empty owner token if this call acquired the lock, `false` and an empty token if another holder already has it, non-nil `error` only when Redis itself failed.
+  - `func (c *Cache) ReleaseLock(ctx context.Context, id, token string) error` — compare-and-delete: only clears the lock if the stored value still equals `token`; a no-op (no error) if the lock expired, was never acquired, or was reacquired by someone else in the meantime.
+  - Lock key: `"paste:lock:" + id`, 5 second TTL, value is a random 16-byte hex-encoded token (not a static marker like `SetNegative`'s `"1"`) — the token is what makes the compare-and-delete safe.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
-Add to `read-service/internal/cache/cache_test.go` (append at the end of the file, same package, using the existing `requireRedis` helper already defined there):
+Added to `read-service/internal/cache/cache_test.go`:
 
 ```go
 func TestAcquireLockMutualExclusion(t *testing.T) {
@@ -45,20 +46,26 @@ func TestAcquireLockMutualExclusion(t *testing.T) {
 
 	c := NewCache(client)
 
-	first, err := c.AcquireLock(context.Background(), id)
+	first, token, err := c.AcquireLock(context.Background(), id)
 	if err != nil {
 		t.Fatalf("AcquireLock() first call error: %v", err)
 	}
 	if !first {
 		t.Fatal("AcquireLock() first call = false, want true")
 	}
+	if token == "" {
+		t.Error("AcquireLock() first call returned empty token, want non-empty")
+	}
 
-	second, err := c.AcquireLock(context.Background(), id)
+	second, secondToken, err := c.AcquireLock(context.Background(), id)
 	if err != nil {
 		t.Fatalf("AcquireLock() second call error: %v", err)
 	}
 	if second {
 		t.Error("AcquireLock() second call = true, want false (lock already held)")
+	}
+	if secondToken != "" {
+		t.Error("AcquireLock() second call returned non-empty token despite not acquiring the lock")
 	}
 }
 
@@ -72,16 +79,16 @@ func TestReleaseLockClearsKey(t *testing.T) {
 
 	c := NewCache(client)
 
-	acquired, err := c.AcquireLock(context.Background(), id)
+	acquired, token, err := c.AcquireLock(context.Background(), id)
 	if err != nil || !acquired {
-		t.Fatalf("AcquireLock() = (%v, %v), want (true, nil)", acquired, err)
+		t.Fatalf("AcquireLock() = (%v, %q, %v), want (true, non-empty, nil)", acquired, token, err)
 	}
 
-	if err := c.ReleaseLock(context.Background(), id); err != nil {
+	if err := c.ReleaseLock(context.Background(), id, token); err != nil {
 		t.Fatalf("ReleaseLock() error: %v", err)
 	}
 
-	reacquired, err := c.AcquireLock(context.Background(), id)
+	reacquired, _, err := c.AcquireLock(context.Background(), id)
 	if err != nil {
 		t.Fatalf("AcquireLock() after release error: %v", err)
 	}
@@ -89,37 +96,99 @@ func TestReleaseLockClearsKey(t *testing.T) {
 		t.Error("AcquireLock() after ReleaseLock = false, want true (lock was cleared)")
 	}
 }
+
+func TestReleaseLockDoesNotDeleteMismatchedToken(t *testing.T) {
+	client := requireRedis(t)
+	defer client.Close()
+	id := "test-lock-mismatch-" + t.Name()
+	key := "paste:lock:" + id
+	t.Cleanup(func() {
+		client.Del(context.Background(), key)
+	})
+
+	c := NewCache(client)
+
+	_, staleToken, err := c.AcquireLock(context.Background(), id)
+	if err != nil {
+		t.Fatalf("AcquireLock() error: %v", err)
+	}
+
+	// Simulate the lock expiring and a different requester acquiring it,
+	// as if this holder's fetch took longer than the lock TTL.
+	if err := client.Set(context.Background(), key, "someone-elses-token", 5*time.Second).Err(); err != nil {
+		t.Fatalf("failed to simulate a new lock holder: %v", err)
+	}
+
+	if err := c.ReleaseLock(context.Background(), id, staleToken); err != nil {
+		t.Fatalf("ReleaseLock() error: %v", err)
+	}
+
+	val, err := client.Get(context.Background(), key).Result()
+	if err != nil {
+		t.Fatalf("expected the new holder's lock to still exist, Get() error: %v", err)
+	}
+	if val != "someone-elses-token" {
+		t.Errorf("lock value = %q, want %q (a stale ReleaseLock must not delete a different holder's lock)", val, "someone-elses-token")
+	}
+}
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
-Run: `cd read-service && go test ./internal/cache/... -run 'TestAcquireLockMutualExclusion|TestReleaseLockClearsKey' -v`
-Expected: build FAIL — `c.AcquireLock undefined` / `c.ReleaseLock undefined` (methods don't exist yet). If Redis isn't running locally, start it first: `cd infra && docker compose up -d redis`.
+Confirmed build failure (`c.AcquireLock undefined`) before implementation existed.
 
-- [ ] **Step 3: User implements `AcquireLock`/`ReleaseLock` in `cache.go`**
+- [x] **Step 3: User implements `AcquireLock`/`ReleaseLock` in `cache.go`**
 
-Suggested shape (user writes this, not Claude):
+Implemented shape (as written by the user):
 
 ```go
-func (c *Cache) AcquireLock(ctx context.Context, id string) (bool, error) {
-	key := "paste:lock:" + id
-	ok, err := c.client.SetNX(ctx, key, "1", 5*time.Second).Result()
-	if err != nil {
-		return false, err
+func (c *Cache) AcquireLock(ctx context.Context, id string) (bool, string, error) {
+	tokenBytes := make([]byte, 16)
+
+	if _, err := rand.Read(tokenBytes); err != nil {
+		return false, "", fmt.Errorf("generate lock token: %w", err)
 	}
-	return ok, nil
+
+	token := hex.EncodeToString(tokenBytes)
+
+	ok, err := c.client.SetNX(ctx, "paste:lock:"+id, token, 5*time.Second).Result()
+	if err != nil {
+		return false, "", err
+	}
+
+	if !ok {
+		return false, "", nil
+	}
+	return ok, token, nil
 }
 
-func (c *Cache) ReleaseLock(ctx context.Context, id string) error {
+func (c *Cache) ReleaseLock(ctx context.Context, id, token string) error {
+	const script = `
+		if redis.call("GET", KEYS[1]) == ARGV[1] then
+			return redis.call("DEL", KEYS[1])
+		end
+		return 0
+	`
+
 	key := "paste:lock:" + id
-	return c.client.Del(ctx, key).Err()
+
+	_, err := c.client.Eval(
+		ctx,
+		script,
+		[]string{key},
+		token,
+	).Result()
+
+	return err
 }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+Requires `"crypto/rand"`, `"encoding/hex"`, and `"fmt"` added to the import block.
 
-Run: `cd read-service && go test ./internal/cache/... -v`
-Expected: PASS — all cache tests, including the two new ones and the pre-existing ones.
+- [x] **Step 4: Run tests to verify they pass**
+
+Ran: `cd read-service && go test ./internal/cache/... -v` — all 8 tests PASS (5 pre-existing + 3 new).
+Ran: `cd read-service && go vet ./...` — clean.
 
 - [ ] **Step 5: Commit**
 
@@ -137,12 +206,12 @@ git commit -m "feat: add Redis distributed lock methods to read-service cache"
 - Test: `read-service/internal/handler/handler_test.go`
 
 **Interfaces:**
-- Consumes: `cache.Cache.AcquireLock(ctx, id) (bool, error)` and `cache.Cache.ReleaseLock(ctx, id) error` from Task 1.
+- Consumes: `cache.Cache.AcquireLock(ctx, id) (bool, string, error)` and `cache.Cache.ReleaseLock(ctx, id, token) error` from Task 1.
 - Produces:
-  - `CacheGetter` interface gains `AcquireLock(ctx context.Context, id string) (bool, error)`.
-  - `CacheSetter` interface gains `ReleaseLock(ctx context.Context, id string) error`.
+  - `CacheGetter` interface gains `AcquireLock(ctx context.Context, id string) (bool, string, error)`.
+  - `CacheSetter` interface gains `ReleaseLock(ctx context.Context, id, token string) error`.
   - `Handler` struct gains two unexported fields, `pollInterval time.Duration` and `pollBudget time.Duration`, set by `New()` to `50 * time.Millisecond` and `1 * time.Second` respectively. Tests (same package) override these directly on the struct to keep the poll loop fast in tests.
-  - `Handler.GetPaste` behavior on a cache Miss: try `AcquireLock`; if acquired, run the existing DB+S3 path and `ReleaseLock` via `defer`; if contended (`false, nil`), poll the cache every `pollInterval` up to `pollBudget` and serve directly from a `Hit`/`Negative` result if one appears, otherwise fall through to the existing DB+S3 path; if `AcquireLock` returns an error, skip locking entirely and fall through to the existing DB+S3 path immediately.
+  - `Handler.GetPaste` behavior on a cache Miss: try `AcquireLock`; if acquired, run the existing DB+S3 path and `ReleaseLock(ctx, id, token)` via `defer`; if contended (`false, "", nil`), poll the cache every `pollInterval` up to `pollBudget` and serve directly from a `Hit`/`Negative` result if one appears, otherwise fall through to the existing DB+S3 path; if `AcquireLock` returns an error, skip locking entirely and fall through to the existing DB+S3 path immediately.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -161,6 +230,7 @@ type fakeCacheGetter struct {
 	getCalls int
 
 	acquireLockResult bool
+	acquireLockToken  string
 	acquireLockErr    error
 	acquireLockCalls  int
 }
@@ -184,9 +254,9 @@ func (f *fakeCacheGetter) Get(ctx context.Context, id string) ([]byte, cache.Res
 	return c, f.results[idx]
 }
 
-func (f *fakeCacheGetter) AcquireLock(ctx context.Context, id string) (bool, error) {
+func (f *fakeCacheGetter) AcquireLock(ctx context.Context, id string) (bool, string, error) {
 	f.acquireLockCalls++
-	return f.acquireLockResult, f.acquireLockErr
+	return f.acquireLockResult, f.acquireLockToken, f.acquireLockErr
 }
 
 type fakeCacheSetter struct {
@@ -195,6 +265,7 @@ type fakeCacheSetter struct {
 	negativeCalled bool
 
 	releaseLockCalled bool
+	releaseLockToken  string
 }
 
 func (f *fakeCacheSetter) SetPositive(ctx context.Context, id string, content []byte, ttl time.Duration) {
@@ -206,8 +277,9 @@ func (f *fakeCacheSetter) SetNegative(ctx context.Context, id string, ttl time.D
 	f.negativeCalled = true
 }
 
-func (f *fakeCacheSetter) ReleaseLock(ctx context.Context, id string) error {
+func (f *fakeCacheSetter) ReleaseLock(ctx context.Context, id, token string) error {
 	f.releaseLockCalled = true
+	f.releaseLockToken = token
 	return nil
 }
 ```
@@ -216,7 +288,7 @@ Then append these new test functions to the same file:
 
 ```go
 func TestGetPasteLockAcquiredRunsMissPathAndReleasesLock(t *testing.T) {
-	cacheGet := &fakeCacheGetter{result: cache.Miss, acquireLockResult: true}
+	cacheGet := &fakeCacheGetter{result: cache.Miss, acquireLockResult: true, acquireLockToken: "tok-abc"}
 	cacheSet := &fakeCacheSetter{}
 	repo := &fakeRepo{meta: &db.PasteMeta{S3Key: "abc123"}}
 	store := &fakeStore{content: "hello from S3"}
@@ -238,6 +310,9 @@ func TestGetPasteLockAcquiredRunsMissPathAndReleasesLock(t *testing.T) {
 	}
 	if !cacheSet.releaseLockCalled {
 		t.Error("cache.ReleaseLock was not called after the lock-acquired path completed")
+	}
+	if cacheSet.releaseLockToken != "tok-abc" {
+		t.Errorf("ReleaseLock token = %q, want %q (the token from AcquireLock)", cacheSet.releaseLockToken, "tok-abc")
 	}
 }
 
@@ -349,13 +424,13 @@ Suggested shape (user writes this, not Claude):
 ```go
 type CacheGetter interface {
 	Get(ctx context.Context, id string) ([]byte, cache.Result)
-	AcquireLock(ctx context.Context, id string) (bool, error)
+	AcquireLock(ctx context.Context, id string) (bool, string, error)
 }
 
 type CacheSetter interface {
 	SetPositive(ctx context.Context, id string, content []byte, ttl time.Duration)
 	SetNegative(ctx context.Context, id string, ttl time.Duration)
-	ReleaseLock(ctx context.Context, id string) error
+	ReleaseLock(ctx context.Context, id, token string) error
 }
 
 type Handler struct {
@@ -394,9 +469,9 @@ func (h *Handler) GetPaste(w http.ResponseWriter, r *http.Request) {
 		// Continue to db
 	}
 
-	acquired, lockErr := h.cacheGetter.AcquireLock(ctx, id)
+	acquired, token, lockErr := h.cacheGetter.AcquireLock(ctx, id)
 	if lockErr == nil && acquired {
-		defer h.cacheSetter.ReleaseLock(ctx, id)
+		defer h.cacheSetter.ReleaseLock(ctx, id, token)
 	} else if lockErr == nil && !acquired {
 		if served := h.waitForCache(ctx, w, r, id); served {
 			return
@@ -577,6 +652,7 @@ git commit -m "chore: configure Redis maxmemory and allkeys-lru eviction for dev
 **Spec coverage:**
 - Same-key stampede protection via Redis distributed lock → Task 1 (lock primitives) + Task 2 (handler wiring). ✓
 - Lock TTL 5s, key `paste:lock:{id}` → Task 1. ✓
+- Owner-token compare-and-delete (fixes the plain-`DEL` cross-holder race) → Task 1, with `TestReleaseLockDoesNotDeleteMismatchedToken` as the regression test. ✓
 - Handler 4-case flow (acquired / error / contended-poll-hit / contended-timeout-fallback) → Task 2, all four cases have dedicated tests. ✓
 - Redis error during `AcquireLock` never blocks, falls straight through → `TestGetPasteLockErrorFallsThroughWithoutPolling`. ✓
 - Poll interval ~50ms, budget ~1s in production, overridable in tests → `Handler.pollInterval`/`pollBudget` fields, defaulted in `New()`, overridden directly in tests (same package). ✓
@@ -585,4 +661,4 @@ git commit -m "chore: configure Redis maxmemory and allkeys-lru eviction for dev
 
 **Placeholder scan:** no TBD/TODO, all code blocks are complete and runnable.
 
-**Type consistency:** `AcquireLock(ctx context.Context, id string) (bool, error)` and `ReleaseLock(ctx context.Context, id string) error` are identical across Task 1 (cache.go), Task 2's interface declarations, and Task 2's fakes/tests. `Result` values (`cache.Miss`, `cache.Hit`, `cache.Negative`) match the existing `cache.go` enum unchanged.
+**Type consistency:** `AcquireLock(ctx context.Context, id string) (bool, string, error)` and `ReleaseLock(ctx context.Context, id, token string) error` are identical across Task 1 (cache.go, as actually implemented), Task 2's interface declarations, and Task 2's fakes/tests. `Result` values (`cache.Miss`, `cache.Hit`, `cache.Negative`) match the existing `cache.go` enum unchanged.

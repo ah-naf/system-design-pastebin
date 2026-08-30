@@ -2,6 +2,9 @@ package cache
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
 	"log"
 	"time"
 
@@ -57,4 +60,44 @@ func (c *Cache) SetNegative(ctx context.Context, id string, ttl time.Duration) {
 	if err := c.client.Set(ctx, key, "1", ttl).Err(); err != nil {
 		log.Printf("cache SetNegative failed for %q: %v", id, err)
 	}
+}
+
+func (c *Cache) AcquireLock(ctx context.Context, id string) (bool, string, error) {
+	tokenBytes := make([]byte, 16)
+
+	if _, err := rand.Read(tokenBytes); err != nil {
+		return false, "", fmt.Errorf("generate lock token: %w", err)
+	}
+
+	token := hex.EncodeToString(tokenBytes)
+
+	ok, err := c.client.SetNX(ctx, "paste:lock:"+id, token, 5*time.Second).Result()
+	if err != nil {
+		return false, "", err
+	}
+
+	if !ok {
+		return false, "", nil
+	}
+	return ok, token, nil
+}
+
+func (c *Cache) ReleaseLock(ctx context.Context, id, token string) error {
+	const script = `
+		if redis.call("GET", KEYS[1]) == ARGV[1] then
+			return redis.call("DEL", KEYS[1])
+		end
+		return 0
+	`
+
+	key := "paste:lock:" + id
+
+	_, err := c.client.Eval(
+		ctx,
+		script,
+		[]string{key},
+		token,
+	).Result()
+
+	return err
 }
