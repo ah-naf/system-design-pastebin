@@ -107,6 +107,37 @@ func TestLoadOverridesDBPoolSettings(t *testing.T) {
 	}
 }
 
+func TestLoadAppliesSweeperBatchSizeDefault(t *testing.T) {
+	setRequiredEnv(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+	if cfg.SweeperBatchSize != 500 {
+		t.Errorf("SweeperBatchSize = %d, want 500", cfg.SweeperBatchSize)
+	}
+}
+
+func TestLoadOverridesSweeperBatchSize(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("SWEEPER_BATCH_SIZE", "50")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+	if cfg.SweeperBatchSize != 50 {
+		t.Errorf("SweeperBatchSize = %d, want 50", cfg.SweeperBatchSize)
+	}
+}
+
+func TestLoadRejectsMalformedSweeperBatchSize(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("SWEEPER_BATCH_SIZE", "not-a-number")
+	if _, err := Load(); err == nil {
+		t.Error("Load() with non-numeric SWEEPER_BATCH_SIZE: expected error, got nil")
+	}
+}
+
 func TestLoadRejectsMalformedDBPoolSettings(t *testing.T) {
 	cases := []string{"DB_MAX_OPEN_CONNS", "DB_MAX_IDLE_CONNS", "DB_CONN_MAX_LIFETIME_SECONDS"}
 	for _, key := range cases {

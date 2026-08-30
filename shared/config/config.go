@@ -22,6 +22,7 @@ type Config struct {
 	DBMaxOpenConns    int
 	DBMaxIdleConns    int
 	DBConnMaxLifetime time.Duration
+	SweeperBatchSize  int
 }
 
 func requiredEnv(key string) (string, error) {
@@ -96,6 +97,11 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("invalid DB_CONN_MAX_LIFETIME_SECONDS: %w", err)
 	}
 
+	sweeperBatchSize, err := strconv.Atoi(envOrDefault("SWEEPER_BATCH_SIZE", "500"))
+	if err != nil {
+		return nil, fmt.Errorf("invalid sweeper size: %w", err)
+	}
+
 	return &Config{
 		DatabaseURL:       databaseURL,
 		Port:              envOrDefault("PORT", "8080"),
@@ -111,5 +117,6 @@ func Load() (*Config, error) {
 		DBMaxOpenConns:    dbMaxOpenConns,
 		DBMaxIdleConns:    dbMaxIdleConns,
 		DBConnMaxLifetime: time.Duration(dbConnMaxLifetimeSeconds) * time.Second,
+		SweeperBatchSize:  sweeperBatchSize,
 	}, nil
 }
