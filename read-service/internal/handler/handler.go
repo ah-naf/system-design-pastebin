@@ -16,11 +16,13 @@ import (
 
 type CacheGetter interface {
 	Get(ctx context.Context, id string) ([]byte, cache.Result)
+	AcquireLock(ctx context.Context, id string) (bool, string, error)
 }
 
 type CacheSetter interface {
 	SetPositive(ctx context.Context, id string, content []byte, ttl time.Duration)
 	SetNegative(ctx context.Context, id string, ttl time.Duration)
+	ReleaseLock(ctx context.Context, id, token string) error
 }
 
 type Repository interface {
@@ -40,14 +42,19 @@ type Handler struct {
 	cacheSetter CacheSetter
 	repo        Repository
 	storeRepo   StoreRepository
+
+	pollInterval time.Duration
+	pollBudget   time.Duration
 }
 
 func New(cacheGetter CacheGetter, cacheSetter CacheSetter, repo Repository, storeRepo StoreRepository) *Handler {
 	return &Handler{
-		cacheGetter: cacheGetter,
-		cacheSetter: cacheSetter,
-		repo:        repo,
-		storeRepo:   storeRepo,
+		cacheGetter:  cacheGetter,
+		cacheSetter:  cacheSetter,
+		repo:         repo,
+		storeRepo:    storeRepo,
+		pollInterval: 50 * time.Millisecond,
+		pollBudget:   1 * time.Second,
 	}
 }
 
@@ -58,15 +65,22 @@ func (h *Handler) GetPaste(w http.ResponseWriter, r *http.Request) {
 	content, result := h.cacheGetter.Get(ctx, id)
 	switch result {
 	case cache.Hit:
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(content)
+		writePlainText(w, content)
 		return
 	case cache.Negative:
 		http.NotFound(w, r)
 		return
 	case cache.Miss:
 		// Continue to db
+	}
+
+	acquired, token, lockErr := h.cacheGetter.AcquireLock(ctx, id)
+	if lockErr == nil && acquired {
+		defer h.cacheSetter.ReleaseLock(ctx, id, token)
+	} else if lockErr == nil && !acquired {
+		if served := h.waitForCache(ctx, w, r, id); served {
+			return
+		}
 	}
 
 	meta, err := h.repo.GetPaste(ctx, id)
@@ -115,6 +129,27 @@ func (h *Handler) GetPaste(w http.ResponseWriter, r *http.Request) {
 	h.cacheSetter.SetPositive(ctx, id, buf.Bytes(), ttl)
 }
 
+func (h *Handler) waitForCache(ctx context.Context, w http.ResponseWriter, r *http.Request, id string) bool {
+	deadline := time.Now().Add(h.pollBudget)
+
+	for time.Now().Before(deadline) {
+		time.Sleep(h.pollInterval)
+
+		content, result := h.cacheGetter.Get(ctx, id)
+		switch result {
+		case cache.Hit:
+			writePlainText(w, content)
+			return true
+		case cache.Negative:
+			http.NotFound(w, r)
+			return true
+		case cache.Miss:
+		}
+	}
+
+	return false
+}
+
 func formatContentLength(size int64) string { return strconv.FormatInt(size, 10) }
 
 func Healthz(postgres Pinger, s3 Pinger) http.HandlerFunc {
@@ -138,4 +173,10 @@ func Healthz(postgres Pinger, s3 Pinger) http.HandlerFunc {
 			"status": "ok",
 		})
 	}
+}
+
+func writePlainText(w http.ResponseWriter, content []byte) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(content)
 }
