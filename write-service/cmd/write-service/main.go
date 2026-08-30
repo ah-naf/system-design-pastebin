@@ -23,6 +23,10 @@ func main() {
 		log.Fatalln(err)
 	}
 
+	if cfg.IDXORSecret == 0 {
+		log.Fatalln("ID_XOR_SECRET is required for write-service")
+	}
+
 	conn, err := pgconn.Open(cfg.DatabaseURL)
 	if err != nil {
 		log.Fatalln(err)

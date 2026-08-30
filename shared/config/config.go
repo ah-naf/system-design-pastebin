@@ -56,11 +56,6 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
-	idXORSecretStr, err := requiredEnv("ID_XOR_SECRET")
-	if err != nil {
-		return nil, err
-	}
-
 	s3UseSSL, err := strconv.ParseBool(
 		envOrDefault("S3_USE_SSL", "false"),
 	)
@@ -76,7 +71,12 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("invalid MAX_PASTE_BYTES: %w", err)
 	}
 
-	idXORSecret, err := strconv.ParseUint(idXORSecretStr, 16, 64)
+	xorSecret := envOrDefault("ID_XOR_SECRET", "")
+	if len(xorSecret) == 0 {
+		xorSecret = "0"
+	}
+
+	idXORSecret, err := strconv.ParseUint(xorSecret, 16, 64)
 	if err != nil {
 		return nil, fmt.Errorf("invalid ID_XOR_SECRET: %w", err)
 	}

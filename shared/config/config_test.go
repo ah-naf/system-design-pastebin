@@ -136,11 +136,15 @@ func TestLoadRequiresS3Credentials(t *testing.T) {
 	}
 }
 
-func TestLoadRequiresIDXORSecret(t *testing.T) {
+func TestLoadAllowsMissingIDXORSecret(t *testing.T) {
 	setRequiredEnv(t)
 	t.Setenv("ID_XOR_SECRET", "")
-	if _, err := Load(); err == nil {
-		t.Error("Load() with empty ID_XOR_SECRET: expected error, got nil")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() with unset ID_XOR_SECRET returned error: %v", err)
+	}
+	if cfg.IDXORSecret != 0 {
+		t.Errorf("IDXORSecret = %#x, want 0 when unset", cfg.IDXORSecret)
 	}
 }
 
