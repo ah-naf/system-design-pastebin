@@ -99,7 +99,7 @@ func Load() (*Config, error) {
 
 	sweeperBatchSize, err := strconv.Atoi(envOrDefault("SWEEPER_BATCH_SIZE", "500"))
 	if err != nil {
-		return nil, fmt.Errorf("invalid sweeper size: %w", err)
+		return nil, fmt.Errorf("invalid SWEEPER_BATCH_SIZE: %w", err)
 	}
 
 	return &Config{
