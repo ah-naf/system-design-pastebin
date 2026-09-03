@@ -347,7 +347,7 @@ git commit -m "feat: add background health checking to load balancer backend poo
 
 ---
 
-### Task 3: Reverse proxy with retry-once
+### Task 3: Reverse proxy with retry-once — DONE
 
 **Files:**
 - Create: `lb/internal/proxy/proxy.go`
@@ -590,7 +590,7 @@ git commit -m "feat: add retry-once reverse proxy for load balancer"
 
 ---
 
-### Task 4: LB configuration
+### Task 4: LB configuration — DONE
 
 **Files:**
 - Create: `lb/internal/config/config.go`
