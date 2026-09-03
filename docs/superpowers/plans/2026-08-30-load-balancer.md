@@ -18,7 +18,7 @@
 
 ---
 
-### Task 1: Backend pool with round-robin selection
+### Task 1: Backend pool with round-robin selection — DONE
 
 **Files:**
 - Create: `lb/internal/pool/pool.go`
@@ -204,7 +204,7 @@ git commit -m "feat: add load balancer backend pool with round-robin selection"
 
 ---
 
-### Task 2: Background health checking
+### Task 2: Background health checking — DONE
 
 **Files:**
 - Create: `lb/internal/pool/healthcheck.go`
@@ -260,20 +260,25 @@ func TestStartHealthChecksStopsOnContextCancel(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
+	defer server.Close()
 
 	p := New([]string{server.URL})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	p.StartHealthChecks(ctx, 10*time.Millisecond, server.Client())
-	time.Sleep(20 * time.Millisecond) // let at least one check run
+	time.Sleep(30 * time.Millisecond) // let several checks run
 
 	cancel()
-	server.Close() // if checks kept running after cancel, the next one would fail and flip this to unhealthy
+	time.Sleep(30 * time.Millisecond) // let any in-flight check finish
 
-	time.Sleep(30 * time.Millisecond)
+	// Sentinel: the server keeps responding 200, so only a health check that
+	// still runs after cancel would flip this back to true.
+	p.backends[0].healthy.Store(false)
 
-	if !p.backends[0].healthy.Load() {
-		t.Error("backend marked unhealthy after context was canceled; health checks should have stopped before the server closed")
+	time.Sleep(50 * time.Millisecond) // long enough for another tick if the loop didn't actually stop
+
+	if p.backends[0].healthy.Load() {
+		t.Error("a health check ran after context was canceled; StartHealthChecks should have stopped")
 	}
 }
 ```
