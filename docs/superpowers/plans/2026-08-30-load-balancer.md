@@ -769,7 +769,7 @@ git commit -m "feat: add load balancer configuration loading"
 
 ---
 
-### Task 5: Wire it together in `main.go`
+### Task 5: Wire it together in `main.go` — DONE
 
 **Files:**
 - Create: `lb/cmd/lb/main.go`
@@ -865,33 +865,35 @@ Expected: no errors.
 
 - [ ] **Step 3: Manual multi-replica verification**
 
-With the existing `infra` stack already running (`cd infra && docker compose up -d`) and `infra/.env` already configured (from earlier phases), run two write-service replicas and two read-service replicas on different ports, then the LB pointed at both:
+With the existing `infra` stack already running (`cd infra && docker compose up -d`) and `infra/.env` already configured (from earlier phases), run two write-service replicas and two read-service replicas on different ports, then the LB pointed at both. **Run every command from the repo root**, not from inside `write-service/`/`read-service/`/`lb/` — `write-service`'s `RunMigrations` call uses the relative path `infra/migrations`, which only resolves correctly when the working directory is the repo root:
 
 ```bash
-# Terminal 1
-cd write-service && PORT=8080 ID_XOR_SECRET=<your existing value> go run ./cmd/write-service
+# Terminal 1 (repo root)
+DATABASE_URL="postgres://<user>:<password>@localhost:<port>/pastebin?sslmode=disable" S3_ACCESS_KEY=<your minio user> S3_SECRET_KEY=<your minio password> ID_XOR_SECRET=<your existing value> PORT=18080 PUBLIC_BASE_URL="http://localhost:18082" go run ./write-service/cmd/write-service
 
-# Terminal 2 (second write replica, same DB/S3, different port)
-cd write-service && PORT=8090 ID_XOR_SECRET=<your existing value> go run ./cmd/write-service
+# Terminal 2 (repo root, second write replica, same DB/S3, different port)
+DATABASE_URL="postgres://<user>:<password>@localhost:<port>/pastebin?sslmode=disable" S3_ACCESS_KEY=<your minio user> S3_SECRET_KEY=<your minio password> ID_XOR_SECRET=<your existing value> PORT=18090 PUBLIC_BASE_URL="http://localhost:18082" go run ./write-service/cmd/write-service
 
-# Terminal 3
-cd read-service && PORT=8081 go run ./cmd/read-service
+# Terminal 3 (repo root)
+DATABASE_URL="postgres://<user>:<password>@localhost:<port>/pastebin?sslmode=disable" S3_ACCESS_KEY=<your minio user> S3_SECRET_KEY=<your minio password> PORT=18081 go run ./read-service/cmd/read-service
 
-# Terminal 4 (second read replica, different port)
-cd read-service && PORT=8091 go run ./cmd/read-service
+# Terminal 4 (repo root, second read replica, different port)
+DATABASE_URL="postgres://<user>:<password>@localhost:<port>/pastebin?sslmode=disable" S3_ACCESS_KEY=<your minio user> S3_SECRET_KEY=<your minio password> PORT=18091 go run ./read-service/cmd/read-service
 
-# Terminal 5
-cd lb && WRITE_BACKENDS="http://localhost:8080,http://localhost:8090" READ_BACKENDS="http://localhost:8081,http://localhost:8091" go run ./cmd/lb
+# Terminal 5 (repo root)
+WRITE_BACKENDS="http://localhost:18080,http://localhost:18090" READ_BACKENDS="http://localhost:18081,http://localhost:18091" PORT=18082 go run ./lb/cmd/lb
 ```
 
 Then, from a sixth terminal:
 
 ```bash
-curl -X POST http://localhost:8082/paste -d '{"content":"hello via lb"}'
-curl http://localhost:8082/healthz
+curl -X POST http://localhost:18082/paste -d '{"content":"hello via lb"}'
+curl http://localhost:18082/healthz
 ```
 
-Expected: the POST succeeds and returns a paste URL; `/healthz` returns `{"status":"ok"}`. Kill one of the write-service replicas (Ctrl+C in its terminal) and repeat the POST a few times — requests should keep succeeding (served by the surviving replica), and after `HEALTH_CHECK_INTERVAL` (default 5s) the LB's own `/healthz` should still report `ok` as long as at least one replica per pool survives. Kill both write replicas and POST again — expect a 503 from the LB.
+Expected: the POST succeeds and returns a paste URL; `/healthz` returns `{"status":"ok"}`. Kill one of the write-service replicas (Ctrl+C in its terminal) and repeat the POST a few times — requests should keep succeeding (served by the surviving replica via the retry-once path even before the next health check), and after `HEALTH_CHECK_INTERVAL` (default 5s) the LB's own `/healthz` should still report `ok` as long as at least one replica per pool survives. Kill both write replicas and POST again — expect a 503 from both `/healthz` and the proxied request. The read path (untouched) keeps working throughout, confirming the two pools are independent.
+
+**Verified live** (2026-09-04): ran this exact scenario with two write-service and two read-service replicas plus the LB, all against the existing dev Postgres/Redis/MinIO stack. Confirmed: round-robin writes across both replicas, reads served correctly through the LB, killing one write replica had zero visible impact on subsequent POSTs (retry-once absorbed it), `/healthz` correctly dropped to 503 once *both* write replicas were down while the read pool (untouched) kept serving normally, and the proxied POST itself also returned 503 `"no healthy backend available"` in that state.
 
 - [ ] **Step 4: Commit**
 
